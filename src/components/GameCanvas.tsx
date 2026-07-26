@@ -4,14 +4,16 @@ import { MAX_LEVEL, getLevelConfig } from '@/lib/levels';
 import { generateBall, getCharacter, getImage, BallConfig, RARITY_COLOR } from '@/lib/characters';
 import { drawAvatar } from '@/lib/drawAvatar';
 import { playMergeSound, playDropSound, playGameOverSound, checkMilestone, resetMilestones, startBGM, stopBGM } from '@/lib/audio';
-const bgImage = new Image();
-bgImage.src = 'https://ezfbyqmpnrlbxkonvzgd.supabase.co/storage/v1/object/public/avatar-photos/bg.jpg';
+
 const GAME_WIDTH = 360;
 const GAME_HEIGHT = 580;
 const WALL_THICKNESS = 30;
 const DROP_Y = 50;
 const DANGER_LINE_Y = 90;
 const DROP_COOLDOWN = 650;
+
+const bgImage = new Image();
+bgImage.src = 'https://ezfbyqmpnrlbxkonvzgd.supabase.co/storage/v1/object/public/avatar-photos/bg.jpg';
 
 export interface GameState {
   score: number;
@@ -40,13 +42,15 @@ interface Props {
 interface BodyMeta { avatarLevel: number; avatarMember: string; avatarImageId: string; avatarMultiplier: number }
 function meta(b: Matter.Body): BodyMeta { return b as any }
 
-// Weighted level picker (small levels more common)
 function randomDropLevel(): number {
   const w = [40, 30, 20, 10, 0, 0, 0, 0];
   let r = Math.random() * w.reduce((a, b) => a + b, 0);
   for (let i = 0; i < w.length; i++) { r -= w[i]; if (r <= 0) return i + 1; }
   return 1;
 }
+
+// 大球破裂延迟（毫秒）
+const RUPTURE_DELAY = 3000;
 
 export default function GameCanvas({ onGameOver, onScoreUpdate, paused, soundEnabled }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -67,9 +71,21 @@ export default function GameCanvas({ onGameOver, onScoreUpdate, paused, soundEna
     gameOverChecked: false, overflowStartTime: 0,
     paused: false,
     bodies: [] as Matter.Body[],
+    // 记录每个最大等级球的开始稳定时间
+    ruptureTimers: new Map<number, number>(), // body.id -> 首次稳定的时间戳
   });
 
   const [scale, setScale] = useState(1);
+
+  const endGame = useCallback(() => {
+    const st = s.current;
+    if (st.isOver) return;
+    st.isOver = true;
+    st.gameOverChecked = true;
+    stopBGM();
+    if (soundEnabled) playGameOverSound();
+    onGameOver({ score: st.score, highestLevel: st.highestLevel, isOver: true, startTime: st.startTime });
+  }, [onGameOver, soundEnabled]);
 
   const addBody = useCallback((engine: Matter.Engine, x: number, y: number, level: number, ball?: BallConfig) => {
     const cfg = getLevelConfig(level);
@@ -85,20 +101,17 @@ export default function GameCanvas({ onGameOver, onScoreUpdate, paused, soundEna
     m.avatarMember = b.member;
     m.avatarImageId = b.image;
     m.avatarMultiplier = imgCfg.multiplier;
-    void char;
     Matter.World.add(engine.world, body);
     s.current.bodies.push(body);
     return body;
   }, []);
 
-  /** Get BallConfigs at a given level already on the board */
   const existingAtLevel = useCallback((level: number): BallConfig[] =>
     s.current.bodies
       .filter((b) => meta(b).avatarLevel === level)
       .map((b) => ({ member: meta(b).avatarMember, image: meta(b).avatarImageId })),
   []);
 
-  /** Pick next drop config */
   const makeNext = useCallback((level?: number): NextDrop => {
     const lv = level ?? randomDropLevel();
     const ball = generateBall(existingAtLevel(lv), 0.35);
@@ -137,6 +150,7 @@ export default function GameCanvas({ onGameOver, onScoreUpdate, paused, soundEna
       pendingMerges: [], mergingIds: new Set(), mergeEffects: [],
       floatTexts: [], milestoneBanner: null, bodies: [],
       lastDropTime: 0, gameOverChecked: false, overflowStartTime: 0,
+      ruptureTimers: new Map(),
     });
     const firstNext = makeNext();
     st.nextLevel = firstNext.level;
@@ -170,7 +184,7 @@ export default function GameCanvas({ onGameOver, onScoreUpdate, paused, soundEna
       if (!st.paused) {
         Matter.Engine.update(engine, dt);
 
-        // Process merges
+        // 处理合并队列
         const merges = [...st.pendingMerges];
         st.pendingMerges = [];
         merges.forEach(({ bodyA, bodyB, level }) => {
@@ -179,7 +193,6 @@ export default function GameCanvas({ onGameOver, onScoreUpdate, paused, soundEna
           const mx = (bodyA.position.x + bodyB.position.x) / 2;
           const my = Math.min((bodyA.position.y + bodyB.position.y) / 2, GAME_HEIGHT - getLevelConfig(level + 1).radius - 5);
 
-          // Same member + same image → double-score bonus
           const sameImage = ma.avatarMember === mb.avatarMember && ma.avatarImageId === mb.avatarImageId;
           const rarityMult = Math.max(ma.avatarMultiplier, mb.avatarMultiplier);
           const bonusMult = sameImage ? 2 : 1;
@@ -191,7 +204,6 @@ export default function GameCanvas({ onGameOver, onScoreUpdate, paused, soundEna
           st.bodies = st.bodies.filter((b) => b !== bodyA && b !== bodyB);
           st.mergingIds.delete(bodyA.id); st.mergingIds.delete(bodyB.id);
 
-          // New merged ball — fresh random character for the new level
           const newBall = generateBall(existingAtLevel(newLevel), 0);
           addBody(engine, mx, my, newLevel, newBall);
 
@@ -215,7 +227,48 @@ export default function GameCanvas({ onGameOver, onScoreUpdate, paused, soundEna
           if (milestone) st.milestoneBanner = { ...milestone, opacity: 1, createdAt: ts };
         });
 
-        // Decay effects
+        // 检查最高等级球的破裂
+        st.bodies.forEach((body) => {
+          const lv = meta(body).avatarLevel;
+          if (lv === MAX_LEVEL) {
+            // 判断球是否稳定（速度很小且在危险线以下不远）
+            if (body.speed < 0.5 && body.position.y > DANGER_LINE_Y + getLevelConfig(MAX_LEVEL).radius) {
+              if (!st.ruptureTimers.has(body.id)) {
+                st.ruptureTimers.set(body.id, ts);
+              } else {
+                const startTime = st.ruptureTimers.get(body.id)!;
+                if (ts - startTime > RUPTURE_DELAY) {
+                  // 破裂奖励
+                  const cfg = getLevelConfig(MAX_LEVEL);
+                  const ruptureScore = cfg.baseScore * 3; // 破裂得分是基础分的3倍
+                  st.score += ruptureScore;
+                  st.floatTexts.push({
+                    x: body.position.x,
+                    y: body.position.y - cfg.radius,
+                    text: `破裂+${ruptureScore}`,
+                    opacity: 1,
+                    vy: -2,
+                    color: '#FF4500',
+                    bold: true
+                  });
+                  // 移除球
+                  Matter.World.remove(engine.world, body);
+                  st.bodies = st.bodies.filter((b) => b !== body);
+                  st.ruptureTimers.delete(body.id);
+                  // 音效（可选）
+                  if (soundEnabled) playMergeSound(MAX_LEVEL + 1); // 借用合成音效
+                }
+              }
+            } else {
+              // 如果球还在运动，清除计时器
+              if (st.ruptureTimers.has(body.id)) {
+                st.ruptureTimers.delete(body.id);
+              }
+            }
+          }
+        });
+
+        // 特效衰减
         st.mergeEffects = st.mergeEffects.map((e) => ({ ...e, flash: e.flash - 0.055 })).filter((e) => e.flash > 0);
         st.floatTexts = st.floatTexts.map((t) => ({ ...t, y: t.y + t.vy, opacity: t.opacity - 0.018 })).filter((t) => t.opacity > 0);
         if (st.milestoneBanner) {
@@ -224,7 +277,7 @@ export default function GameCanvas({ onGameOver, onScoreUpdate, paused, soundEna
           if (st.milestoneBanner.opacity <= 0) st.milestoneBanner = null;
         }
 
-        // Game-over
+        // 原有的游戏结束逻辑（顶部溢出）
         const overflow = st.bodies.some(
           (b) => b.position.y - getLevelConfig(meta(b).avatarLevel).radius < DANGER_LINE_Y && b.speed < 1
         );
@@ -255,7 +308,7 @@ export default function GameCanvas({ onGameOver, onScoreUpdate, paused, soundEna
       engineRef.current = null;
       stopBGM();
     };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => { s.current.paused = paused; }, [paused]);
   useEffect(() => {
@@ -264,21 +317,21 @@ export default function GameCanvas({ onGameOver, onScoreUpdate, paused, soundEna
   }, [soundEnabled]);
 
   function render(ctx: CanvasRenderingContext2D, st: typeof s.current, ts: number) {
-        // 绘制背景图（铺满 Canvas）
+    // 背景
     if (bgImage.complete) {
       ctx.drawImage(bgImage, 0, 0, GAME_WIDTH, GAME_HEIGHT);
     } else {
-      // 图片未加载时用深灰背景
       ctx.fillStyle = '#1a1a1a';
       ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
     }
 
-        ctx.fillStyle = 'rgba(255,255,255,0.15)';
+    // 墙壁
+    ctx.fillStyle = 'rgba(255,255,255,0.15)';
     ctx.fillRect(0, 0, 2, GAME_HEIGHT);
     ctx.fillRect(GAME_WIDTH - 2, 0, 2, GAME_HEIGHT);
     ctx.fillRect(0, GAME_HEIGHT - 2, GAME_WIDTH, 2);
 
-    // Danger line
+    // 危险线
     ctx.save();
     ctx.setLineDash([8, 6]);
     ctx.strokeStyle = `rgba(255,255,255,${0.4 + 0.3 * Math.sin(ts / 400)})`;
@@ -289,14 +342,14 @@ export default function GameCanvas({ onGameOver, onScoreUpdate, paused, soundEna
     ctx.fillText('⚠ 危险线', GAME_WIDTH - 8, DANGER_LINE_Y - 4);
     ctx.restore();
 
-    // Bodies
+    // 球体
     st.bodies.forEach((body) => {
       const m = meta(body);
       const eff = st.mergeEffects.find((e) => Math.abs(e.x - body.position.x) < 6 && Math.abs(e.y - body.position.y) < 6);
       drawAvatar(ctx, body.position.x, body.position.y, m.avatarLevel, m.avatarMember, m.avatarImageId, 1, eff ? eff.flash : 0, ts);
     });
 
-    // Merge burst rings
+    // 合成光环
     st.mergeEffects.forEach((e) => {
       const r = getLevelConfig(e.level).radius;
       ctx.save();
@@ -306,7 +359,6 @@ export default function GameCanvas({ onGameOver, onScoreUpdate, paused, soundEna
       if (e.isBonus) { ctx.shadowColor = '#FFD700'; ctx.shadowBlur = 16; }
       ctx.beginPath(); ctx.arc(e.x, e.y, r * (1 + (1 - e.flash) * 0.6), 0, Math.PI * 2); ctx.stroke();
       if (e.isBonus) {
-        // extra gold star burst
         for (let i = 0; i < 6; i++) {
           const a = (i / 6) * Math.PI * 2 + ts / 400;
           const d = r * (1.1 + (1 - e.flash) * 0.4);
@@ -320,7 +372,7 @@ export default function GameCanvas({ onGameOver, onScoreUpdate, paused, soundEna
       ctx.restore();
     });
 
-    // Float texts
+    // 浮动文字
     st.floatTexts.forEach((t) => {
       ctx.save();
       ctx.globalAlpha = t.opacity;
@@ -333,7 +385,7 @@ export default function GameCanvas({ onGameOver, onScoreUpdate, paused, soundEna
       ctx.restore();
     });
 
-    // Milestone banner
+    // 里程碑横幅
     if (st.milestoneBanner) {
       const b = st.milestoneBanner;
       ctx.save(); ctx.globalAlpha = b.opacity;
@@ -350,24 +402,22 @@ export default function GameCanvas({ onGameOver, onScoreUpdate, paused, soundEna
       ctx.restore();
     }
 
-    // Drop preview + aim line
+    // 掉落预览与瞄准线
     if (!st.isOver) {
       const cfg = getLevelConfig(st.nextLevel);
       const cx = Math.max(cfg.radius + 4, Math.min(GAME_WIDTH - cfg.radius - 4, st.cursorX));
       ctx.save(); ctx.setLineDash([5, 5]);
-      ctx.strokeStyle = 'rgba(255,255,255,0.3)'; // 原来大约是粉红色
+      ctx.strokeStyle = 'rgba(255,255,255,0.3)';
       ctx.beginPath(); ctx.moveTo(cx, DROP_Y + cfg.radius); ctx.lineTo(cx, GAME_HEIGHT); ctx.stroke();
       ctx.restore();
       drawAvatar(ctx, cx, DROP_Y, st.nextLevel, st.nextMember, st.nextImage, 0.82, 0, ts);
 
-      // "Match available" sparkle hint — check if same member+image exists at this level
       const hasMatch = st.bodies.some(
         (b) => meta(b).avatarLevel === st.nextLevel
           && meta(b).avatarMember === st.nextMember
           && meta(b).avatarImageId === st.nextImage
       );
       if (hasMatch) {
-        const char = getCharacter(st.nextMember);
         ctx.save();
         ctx.globalAlpha = 0.6 + 0.4 * Math.sin(ts / 300);
         ctx.strokeStyle = RARITY_COLOR['rare'];
@@ -376,15 +426,15 @@ export default function GameCanvas({ onGameOver, onScoreUpdate, paused, soundEna
         ctx.beginPath(); ctx.arc(cx, DROP_Y, cfg.radius + 3, 0, Math.PI * 2); ctx.stroke();
         ctx.setLineDash([]);
         ctx.font = `bold 10px "PingFang SC",sans-serif`;
-        ctx.fillStyle = char.bg[0]; ctx.textAlign = 'center';
+        ctx.fillStyle = '#ffffff';
+        ctx.textAlign = 'center';
         ctx.fillText('双倍机会!', cx, DROP_Y - cfg.radius - 5);
         ctx.restore();
       }
     }
 
-    // Red flash on overflow
     if (st.overflowStartTime > 0) {
-            const a = Math.sin((ts - st.overflowStartTime) / 130) * 0.12;
+      const a = Math.sin((ts - st.overflowStartTime) / 130) * 0.12;
       if (a > 0) { ctx.save(); ctx.fillStyle = `rgba(255,255,255,${a})`; ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT); ctx.restore(); }
     }
   }
@@ -414,7 +464,7 @@ export default function GameCanvas({ onGameOver, onScoreUpdate, paused, soundEna
   }
 
   return (
-    <div ref={containerRef} className="w-full h-full flex items-center justify-center" style={{ touchAction: 'none' }}>
+    <div ref={containerRef} className="w-full h-full flex items-center justify-center relative" style={{ touchAction: 'none' }}>
       <canvas
         ref={canvasRef}
         style={{ transform: `scale(${scale})`, transformOrigin: 'center center', cursor: 'crosshair', borderRadius: '12px', boxShadow: '0 8px 40px rgba(255,105,180,0.25)' }}
@@ -423,6 +473,16 @@ export default function GameCanvas({ onGameOver, onScoreUpdate, paused, soundEna
         onTouchMove={(e) => { e.preventDefault(); handleMove(e.touches[0].clientX); }}
         onTouchEnd={(e) => { e.preventDefault(); handleDrop(); }}
       />
+      {/* 主动结束游戏按钮 */}
+      {!s.current.isOver && (
+        <button
+          onClick={endGame}
+          className="absolute bottom-2 right-2 z-10 px-3 py-1 rounded-full text-xs font-bold text-white opacity-70 hover:opacity-100 transition-opacity"
+          style={{ background: 'rgba(255,255,255,0.15)', backdropFilter: 'blur(4px)', border: '1px solid rgba(255,255,255,0.25)' }}
+        >
+          结束游戏
+        </button>
+      )}
     </div>
   );
 }
