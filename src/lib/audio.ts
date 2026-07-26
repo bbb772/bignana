@@ -23,10 +23,10 @@ document.addEventListener('touchstart', () => {
 
 // ── 里程碑奖励音频（短音频，不循环）───────────────────────────────────────
 const MILESTONE_CUSTOM_SOUNDS: Record<number, string> = {
-  0: 'https://ezfbyqmpnrlbxkonvzgd.supabase.co/storage/v1/object/sign/audio/milestone_1.mp3?token=eyJraWQiOiJzdG9yYWdlLXVybC1zaWduaW5nLWtleV81MDYyOTk5OC1lNzM1LTQyMjItOGIyZi0wMjYwNjAwM2M3ZjciLCJhbGciOiJIUzI1NiJ9.eyJ1cmwiOiJhdWRpby9taWxlc3RvbmVfMS5tcDMiLCJzY29wZSI6ImRvd25sb2FkIiwiaWF0IjoxNzg1MDMzNzQ1LCJleHAiOjE4NzE0MzM3NDV9.J-RK0-XBnFg8nAAcVr1m6n5Tz0HJyaizxWtiLy_mW2o',
-  1: '',
-  2: 'https://ezfbyqmpnrlbxkonvzgd.supabase.co/storage/v1/object/sign/audio/milestone_2.mp3?token=eyJraWQiOiJzdG9yYWdlLXVybC1zaWduaW5nLWtleV81MDYyOTk5OC1lNzM1LTQyMjItOGIyZi0wMjYwNjAwM2M3ZjciLCJhbGciOiJIUzI1NiJ9.eyJ1cmwiOiJhdWRpby9taWxlc3RvbmVfMi5tcDMiLCJzY29wZSI6ImRvd25sb2FkIiwiaWF0IjoxNzg1MDMzODQ0LCJleHAiOjE4NzE0MzM4NDR9.0WQhmUajuASNti4Epv9p1MrOvab-UwpZs1kwhANEs7w',
-  3: '',
+  0: 'https://ezfbyqmpnrlbxkonvzgd.supabase.co/storage/v1/object/sign/audio/newmilestone1%20(1).mp3?token=eyJraWQiOiJzdG9yYWdlLXVybC1zaWduaW5nLWtlV81MDYyOTk5OC1lNzM1LTQyMjItOGIyZi0wMjYwNjAwM2M3ZjciLCJhbGciOiJIUzI1NiJ9.eyJ1cmwiOiJhdWRpby9uZXdtaWxlc3RvbmUxICgxKS5tcDMiLCJzY29wZSI6ImRvd25sb2FkIiwiaWF0IjoxNzg1MDQ1MDAwLCJleHAiOjE4NzE0NDUwMDB9.r9lxyW3VQktbObFkHwNI5_hOZR70Qxmp47SYIyX_ay8',
+  1: 'https://ezfbyqmpnrlbxkonvzgd.supabase.co/storage/v1/object/sign/audio/newmilestone2.mp3?token=eyJraWQiOiJzdG9yYWdlLXVybC1zaWduaW5nLWtlV81MDYyOTk5OC1lNzM1LTQyMjItOGIyZi0wMjYwNjAwM2M3ZjciLCJhbGciOiJIUzI1NiJ9.eyJ1cmwiOiJhdWRpby9uZXdtaWxlc3RvbmUyLm1wMyIsInNjb3BlIjoiZG93bmxvYWQiLCJpYXQiOjE3ODUwNDUwMjksImV4cCI6MTg3MTQ0NTAyOX0.wD11R_G7Wd1UKx-KJnzeQcuPDul-bHaX38EqJn8LNl8',
+  2: 'https://ezfbyqmpnrlbxkonvzgd.supabase.co/storage/v1/object/sign/audio/newmilestone1%20(1).mp3?token=eyJraWQiOiJzdG9yYWdlLXVybC1zaWduaW5nLWtlV81MDYyOTk5OC1lNzM1LTQyMjItOGIyZi0wMjYwNjAwM2M3ZjciLCJhbGciOiJIUzI1NiJ9.eyJ1cmwiOiJhdWRpby9uZXdtaWxlc3RvbmUxICgxKS5tcDMiLCJzY29wZSI6ImRvd25sb2FkIiwiaWF0IjoxNzg1MDQ1MDAwLCJleHAiOjE4NzE0NDUwMDB9.r9lxyW3VQktbObFkHwNI5_hOZR70Qxmp47SYIyX_ay8',
+  3: 'https://ezfbyqmpnrlbxkonvzgd.supabase.co/storage/v1/object/sign/audio/newmilestone2.mp3?token=eyJraWQiOiJzdG9yYWdlLXVybC1zaWduaW5nLWtlV81MDYyOTk5OC1lNzM1LTQyMjItOGIyZi0wMjYwNjAwM2M3ZjciLCJhbGciOiJIUzI1NiJ9.eyJ1cmwiOiJhdWRpby9uZXdtaWxlc3RvbmUyLm1wMyIsInNjb3BlIjoiZG93bmxvYWQiLCJpYXQiOjE3ODUwNDUwMjksImV4cCI6MTg3MTQ0NTAyOX0.wD11R_G7Wd1UKx-KJnzeQcuPDul-bHaX38EqJn8LNl8',
 };
 
 export const SCORE_MILESTONES = [
